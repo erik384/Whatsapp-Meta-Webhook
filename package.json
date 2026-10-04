@@ -1,0 +1,25 @@
+{
+  "name": "whatsapp-meta-webhook",
+  "version": "1.0.0",
+  "description": "WhatsApp Cloud API <-> HubSpot Live-Sync für Bodenfix: eingehende Text- und Sprachnachrichten landen am HubSpot-Kontakt, neue Nummern werden als Lead angelegt, Versand aus Claude per MCP.",
+  "type": "module",
+  "main": "app.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node app.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "send": "node bin/send.js",
+    "sync": "node bin/sync-phones.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "express": "^5.2.1",
+    "zod": "^4.6.5"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
