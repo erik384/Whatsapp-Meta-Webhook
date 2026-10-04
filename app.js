@@ -1,7 +1,7 @@
 // WhatsApp Cloud API <-> HubSpot Live-Sync für Bodenfix.
 // Routen:
 //   GET  /webhook (und /)      Meta-Verifizierung
-//   POST /webhook (und /)      eingehende Nachrichten/Status (sofort 200, Verarbeitung asynchron)
+//   POST /webhook (und /)      eingehende Nachrichten/Status, Coexistence-Echos/-Verlauf/-Adressbuch (sofort 200, asynchron)
 //   POST /send                 Nachricht senden  { to, text | template }   (API_KEY)
 //   ALL  /mcp, /mcp/<secret>   MCP-Server für Claude                        (API_KEY oder MCP_PATH_SECRET)
 //   GET  /health
@@ -9,7 +9,7 @@ import express from 'express';
 import { config, missingConfig } from './src/config.js';
 import { Store } from './src/store.js';
 import { verifySignature } from './src/whatsapp.js';
-import { ensurePhoneIndexProperty, syncPhoneIndex } from './src/hubspot.js';
+import { ensurePhoneIndexProperty, ensureLeadherkunftOption, syncPhoneIndex } from './src/hubspot.js';
 import { createInboundProcessor } from './src/inbound.js';
 import { createOutbound } from './src/outbound.js';
 import { mcpHandler } from './src/mcp.js';
@@ -105,6 +105,12 @@ app.listen(config.port, async () => {
     log.info(`[hubspot] Index-Property ${prop.name} ${prop.created ? 'angelegt' : 'vorhanden'}.`);
   } catch (err) {
     log.error(`[hubspot] Index-Property konnte nicht geprüft werden: ${err.message}`);
+  }
+  try {
+    const opt = await ensureLeadherkunftOption();
+    if (opt.ensured) log.info(`[hubspot] Leadherkunft-Option "${config.lead.herkunft}" ${opt.added ? 'angelegt' : 'vorhanden'}.`);
+  } catch (err) {
+    log.error(`[hubspot] Leadherkunft-Option konnte nicht geprüft werden: ${err.message}`);
   }
   await runSync(!store.lastSync);
   if (config.hubspot.syncIntervalMinutes > 0) {

@@ -25,21 +25,62 @@ export function parseWebhook(body) {
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
-      if (change.field !== 'messages') continue;
       const phoneNumberId = value.metadata?.phone_number_id;
+      const businessNumber = value.metadata?.display_phone_number;
+      if (change.field === 'smb_message_echoes') {
+        // Coexistence: Nachrichten, die in der WhatsApp-Business-App geschrieben wurden
+        for (const m of value.message_echoes || []) events.push(flattenMessage(m, { kind: 'echo', phoneNumberId, counterpart: m.to, names: new Map() }));
+        continue;
+      }
+      if (change.field === 'history') {
+        // Coexistence: Verlauf der letzten 6 Monate, in Chunks
+        for (const h of value.history || []) {
+          for (const thread of h.threads || []) {
+            for (const m of thread.messages || []) {
+              const fromMe = m.history_context?.from_me ?? (m.from !== thread.id && (m.to === thread.id || m.from === businessNumber));
+              events.push(flattenMessage(m, { kind: 'history', phoneNumberId, counterpart: thread.id, direction: fromMe ? 'out' : 'in', names: new Map(), chunk: h.metadata }));
+            }
+          }
+        }
+        continue;
+      }
+      if (change.field === 'smb_app_state_sync') {
+        // Coexistence: Adressbuch der Business-App (Name + Nummer)
+        for (const st of value.state_sync || []) {
+          if (st.type !== 'contact' || !st.contact) continue;
+          events.push({ kind: 'contact', phoneNumberId, action: st.action, phone: st.contact.phone_number, fullName: st.contact.full_name || st.contact.first_name || '', timestamp: Number(st.metadata?.timestamp || 0) * 1000 });
+        }
+        continue;
+      }
+      if (change.field !== 'messages') continue;
       const names = new Map((value.contacts || []).map((c) => [c.wa_id, c.profile?.name]));
       for (const m of value.messages || []) {
+        events.push(flattenMessage(m, { kind: 'message', phoneNumberId, counterpart: m.from, names }));
+      }
+      for (const s of value.statuses || []) {
+        events.push({ kind: 'status', phoneNumberId, messageId: s.id, status: s.status, recipient: s.recipient_id, timestamp: Number(s.timestamp) * 1000, errors: s.errors || [] });
+      }
+    }
+  }
+  return events;
+}
+
+/** Vereinheitlicht eine Nachricht aus messages / message_echoes / history. */
+function flattenMessage(m, { kind, phoneNumberId, counterpart, names, direction = 'in', chunk }) {
+  {
         const ev = {
-          kind: 'message',
+          kind,
           phoneNumberId,
           messageId: m.id,
-          from: m.from,
-          profileName: names.get(m.from) || '',
+          from: counterpart, // Gegenstelle (Kunde), auch bei ausgehenden Echo-/Verlaufsnachrichten
+          direction: kind === 'echo' ? 'out' : direction,
+          profileName: names.get(counterpart) || '',
           timestamp: Number(m.timestamp) * 1000,
           type: m.type,
           text: '',
           caption: '',
           media: null,
+          chunk,
           raw: m,
         };
         switch (m.type) {
@@ -71,17 +112,17 @@ export function parseWebhook(body) {
           case 'reaction':
             ev.text = `Reaktion ${m.reaction?.emoji || ''} auf Nachricht ${m.reaction?.message_id || ''}`;
             break;
+          case 'edit':
+            ev.text = `Nachricht ${m.edit?.original_message_id || ''} bearbeitet: ${m.edit?.message?.text?.body || ''}`.trim();
+            break;
+          case 'revoke':
+            ev.text = `Nachricht ${m.revoke?.original_message_id || ''} zurückgezogen`;
+            break;
           default:
             ev.text = m.errors?.length ? `Nicht unterstützte Nachricht (${m.errors.map((e) => e.title).join(', ')})` : `Nachricht vom Typ ${m.type}`;
         }
-        events.push(ev);
-      }
-      for (const s of value.statuses || []) {
-        events.push({ kind: 'status', phoneNumberId, messageId: s.id, status: s.status, recipient: s.recipient_id, timestamp: Number(s.timestamp) * 1000, errors: s.errors || [] });
-      }
-    }
+        return ev;
   }
-  return events;
 }
 
 async function graphRequest(path, { method = 'GET', body, query } = {}) {
@@ -123,6 +164,18 @@ export async function sendTemplate(toWaId, { name, language = 'de', components =
     body: { messaging_product: 'whatsapp', to: toWaId, type: 'template', template: { name, language: { code: language }, components } },
   });
   return { messageId: r.messages?.[0]?.id, waId: r.contacts?.[0]?.wa_id };
+}
+
+/**
+ * Coexistence: fordert nach dem Onboarding die Übernahme von Adressbuch ('smb_app_state_sync')
+ * bzw. Verlauf ('history') an. Muss innerhalb von 24 h nach dem Onboarding erfolgen.
+ */
+export async function requestSmbAppSync(syncType) {
+  if (!['smb_app_state_sync', 'history'].includes(syncType)) throw new Error(`Unbekannter sync_type: ${syncType}`);
+  return graphRequest(`${config.meta.phoneNumberId}/smb_app_data`, {
+    method: 'POST',
+    body: { messaging_product: 'whatsapp', sync_type: syncType },
+  });
 }
 
 export async function markAsRead(messageId) {

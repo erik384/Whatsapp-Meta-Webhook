@@ -24,6 +24,8 @@ export const config = {
     phoneNumberId: env('WHATSAPP_PHONE_NUMBER_ID'),
     graphVersion: env('GRAPH_API_VERSION', 'v25.0'),
     markAsRead: bool('MARK_AS_READ', true),
+    importHistory: bool('IMPORT_HISTORY', true), // Coexistence: 6-Monats-Verlauf aus der Business-App übernehmen
+    logAppEchoes: bool('LOG_APP_ECHOES', true),  // Coexistence: Nachrichten, die Erik in der App schreibt, in HubSpot loggen
   },
 
   hubspot: {
@@ -40,7 +42,7 @@ export const config = {
     policy: env('LEAD_POLICY', 'inbound'), // inbound | classify | never
     status: env('LEAD_STATUS', 'NEW'),
     lifecycleStage: env('LIFECYCLE_STAGE', 'lead'),
-    herkunft: env('LEADHERKUNFT_VALUE'),
+    herkunft: env('LEADHERKUNFT_VALUE', 'WhatsApp'),
     defaultCountryCode: env('DEFAULT_COUNTRY_CODE', '49'),
   },
 

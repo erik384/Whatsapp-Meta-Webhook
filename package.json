@@ -11,7 +11,8 @@
     "start": "node app.js",
     "test": "node --test \"test/**/*.test.js\"",
     "send": "node bin/send.js",
-    "sync": "node bin/sync-phones.js"
+    "sync": "node bin/sync-phones.js",
+    "coexistence-sync": "node bin/coexistence-sync.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

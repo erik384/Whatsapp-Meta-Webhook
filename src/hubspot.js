@@ -68,6 +68,29 @@ export async function ensurePhoneIndexProperty() {
   return { created: true, name };
 }
 
+/** Fügt einer Enumerations-Property eine Option hinzu (reine Funktion, für Tests). */
+export function mergeEnumOption(options, value, label = value) {
+  const existing = options || [];
+  if (existing.some((o) => o.value === value)) return { options: existing, added: false };
+  return {
+    options: [...existing, { label, value, displayOrder: existing.length, hidden: false }],
+    added: true,
+  };
+}
+
+/** Stellt sicher, dass die Option (z. B. "WhatsApp") in Leadherkunft existiert. Idempotent. */
+export async function ensureLeadherkunftOption(value = config.lead.herkunft) {
+  if (!value) return { ensured: false };
+  const prop = await hs('/crm/v3/properties/contacts/leadherkunft');
+  const { options, added } = mergeEnumOption(prop.options, value);
+  if (!added) return { ensured: true, added: false };
+  await hs('/crm/v3/properties/contacts/leadherkunft', {
+    method: 'PATCH',
+    body: { options: options.map(({ label, value: v, displayOrder, hidden }) => ({ label, value: v, displayOrder, hidden: Boolean(hidden) })) },
+  });
+  return { ensured: true, added: true };
+}
+
 // ------------------------------------------------------------------ Kontakte
 
 function contactFromResult(r) {
@@ -187,7 +210,7 @@ export async function createLeadContact({ e164, profileName }) {
     if (err.status === 400 && config.lead.herkunft && /leadherkunft/i.test(err.message)) {
       delete properties.leadherkunft;
       const r = await hs('/crm/v3/objects/contacts', { method: 'POST', body: { properties } });
-      console.warn(`[hubspot] LEADHERKUNFT_VALUE "${config.lead.herkunft}" ist in HubSpot keine gültige Option, Kontakt ohne Herkunft angelegt.`);
+      console.error(`[hubspot] LEADHERKUNFT_VALUE "${config.lead.herkunft}" ist in HubSpot keine gültige Option – Kontakt ohne Herkunft angelegt. Dienst neu starten, damit die Option angelegt wird.`);
       return { contact: contactFromResult(r), created: true };
     }
     throw err;

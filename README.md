@@ -5,7 +5,8 @@ Node.js-Dienst, der die **WhatsApp Business Cloud API (Meta)** mit **HubSpot** v
 | Was | Wie |
 |---|---|
 | Kunde schreibt per WhatsApp (Text, Sprachnachricht, Bild, Dokument) | Webhook trifft in Echtzeit ein → Nummer wird normalisiert und mit HubSpot abgeglichen → Nachricht landet als **WhatsApp-Kommunikation** in der Kontakt-Timeline. Sprachnachrichten werden transkribiert (optional) und als Datei angehängt. |
-| Nummer ist in HubSpot unbekannt | Kontakt wird **nur als Lead** angelegt (Lifecycle `lead`, Lead-Status „Neuer Kontakt“) – wahlweise jede eingehende Anfrage (`inbound`), nur nach Claude-Prüfung „ist das eine Kundenanfrage?“ (`classify`) oder nie (`never`). |
+| Nummer ist in HubSpot unbekannt | Kontakt wird **nur als Lead** angelegt (Lifecycle `lead`, Lead-Status „Neuer Kontakt“, **Leadherkunft „WhatsApp“**) – wahlweise jede eingehende Anfrage (`inbound`), nur nach Claude-Prüfung „ist das eine Kundenanfrage?“ (`classify`) oder nie (`never`). |
+| Erik schreibt am Handy in der WhatsApp-Business-App | Mit **Coexistence** spiegelt Meta diese Nachrichten per Webhook (`smb_message_echoes`); sie werden als ausgehend am HubSpot-Kontakt protokolliert. Beim Verbinden kann der Verlauf der letzten 6 Monate übernommen werden. |
 | Erik schreibt in Claude „schick Herrn Müller: …“ | Claude ruft den **MCP-Server** dieses Dienstes auf → Nachricht geht über die Geschäftsnummer raus und wird ebenfalls am HubSpot-Kontakt protokolliert. |
 | Nummern „immer abgleichen“ | Alle Kontakt-Telefonnummern (`phone`, `mobilephone`, `hs_whatsapp_phone_number`) werden fortlaufend in die Property **`whatsapp_e164`** normalisiert (+49…). Dadurch ist der Abgleich ein exakter Treffer, egal ob in HubSpot „0172-6748792“, „+49 172 …“ oder „0049172…“ steht. Läuft beim Start komplett und danach alle 15 Minuten inkrementell. |
 
@@ -30,11 +31,38 @@ Zustand (verarbeitete Message-IDs, Konversationen, letzter Sync) liegt in `data/
 ### 1. Meta / WhatsApp Business
 
 1. Unter [developers.facebook.com](https://developers.facebook.com) eine App vom Typ **Business** anlegen und das Produkt **WhatsApp** hinzufügen.
-2. Die Bodenfix-Geschäftsnummer registrieren (oder zunächst die Testnummer nutzen). **Wichtig:** Eine Nummer kann entweder in der WhatsApp-Business-App *oder* in der Cloud API laufen. Mit „Coexistence“ (seit 2025 verfügbar) lässt sich die bestehende Business-App-Nummer mit der Cloud API verbinden – dann bleiben Chats am Handy *und* laufen über diesen Dienst.
+2. Die bestehende Business-App-Nummer per **Coexistence** verbinden (siehe nächster Abschnitt). Die Nummer bleibt in der App auf dem Handy nutzbar *und* läuft über diesen Dienst.
 3. **System-User-Token** erstellen (Business-Einstellungen → System-Benutzer → Token generieren, unbegrenzt) mit den Berechtigungen `whatsapp_business_messaging` und `whatsapp_business_management` → `WHATSAPP_TOKEN`.
 4. WhatsApp → API-Setup: **Phone number ID** kopieren → `WHATSAPP_PHONE_NUMBER_ID`.
 5. App → Einstellungen → Allgemein: **App-Geheimcode** → `META_APP_SECRET` (prüft die Webhook-Signatur).
-6. WhatsApp → Konfiguration → Webhook: Callback-URL `https://<deine-domain>/webhook`, Verify-Token = `VERIFY_TOKEN`. Webhook-Feld **`messages`** abonnieren.
+6. WhatsApp → Konfiguration → Webhook: Callback-URL `https://<deine-domain>/webhook`, Verify-Token = `VERIFY_TOKEN`. Webhook-Felder abonnieren: **`messages`** sowie für Coexistence **`smb_message_echoes`**, **`history`** und **`smb_app_state_sync`**.
+
+### 1a. Coexistence: bestehende WhatsApp-Business-App-Nummer anbinden
+
+Coexistence lässt eine Nummer gleichzeitig in der WhatsApp-Business-App (Handy) und in der Cloud API laufen. Das ist der gewählte Weg für Bodenfix.
+
+**Voraussetzungen (Stand Oktober 2026):**
+- WhatsApp-Business-App ab Version 2.24.17, Nummer seit mindestens 7 Tagen aktiv in der App.
+- Das Onboarding läuft über Metas **Embedded Signup**. Den darf nur ein von Meta verifizierter **Tech Provider** oder **Solution Partner** anbieten. Zwei Wege:
+  1. **Eigene Meta-App als Tech Provider** registrieren (Business-Verifizierung von Bodenfix + Tech-Provider-Verifizierung + App-Review für Embedded Signup). Dauert erfahrungsgemäß Wochen, dafür keine laufenden Partnerkosten.
+  2. **Onboarding-Partner** nutzen, der Coexistence unterstützt und die Webhooks direkt an deine URL weiterleitet (z. B. Dualhook als reiner Onboarding-Dienst, oder 360dialog). Das ist der schnelle Weg; der Dienst hier bleibt unverändert, solange der Partner die Standard-Cloud-API und Webhook-Weiterleitung („Webhook Override“) bietet.
+- Beim Verbinden werden alle verknüpften Geräte (WhatsApp Web, Desktop) getrennt und müssen neu verbunden werden. Gruppen, Broadcast-Listen, Einmal-Ansicht und Live-Standort sind über die API nicht verfügbar; in der App funktionieren sie weiter.
+
+**Ablauf am Handy:** Embedded-Signup-Link des Tech Providers/Partners öffnen → Nummer der Business-App eintragen → in WhatsApp kommt eine Nachricht vom offiziellen Facebook-Business-Konto mit dem Button „Mit der Business-Plattform verbinden“ → bestätigen und optional **Chatverlauf freigeben** → Code zurück in den Signup-Flow.
+
+**Innerhalb von 24 Stunden danach** die Übernahme anstoßen (sonst muss das Onboarding wiederholt werden), erst Adressbuch, dann Verlauf:
+
+```bash
+npm run coexistence-sync -- contacts
+npm run coexistence-sync -- history
+```
+
+Oder in Claude: `whatsapp_request_app_sync` mit `contacts`, dann `history`. Meta liefert daraufhin das Adressbuch (`smb_app_state_sync`) und den Verlauf der letzten 6 Monate (`history`) in Stücken per Webhook. Der Dienst:
+- merkt sich die Namen aus dem App-Adressbuch (sie werden beim Anlegen neuer Leads verwendet), legt aus dem Adressbuch aber **keine** HubSpot-Kontakte an,
+- übernimmt Verlaufsnachrichten nur für Nummern, die es bereits in HubSpot gibt (Text und Nachrichtentyp, keine Dateien, weil deren Download-IDs abgelaufen sind),
+- protokolliert ab dann jede Nachricht, die du in der App schreibst, als ausgehend am Kontakt (`LOG_APP_ECHOES`).
+
+Nachrichten, die über die App gehen, bleiben kostenlos; nur Nachrichten über die API (Claude/`/send`) kosten Meta-Gebühren. Der Durchsatz einer Coexistence-Nummer ist auf 20 Nachrichten pro Sekunde begrenzt, was für Bodenfix irrelevant ist.
 
 ### 2. HubSpot Private App
 
@@ -46,14 +74,14 @@ Einstellungen → Integrationen → Private Apps → App erstellen. Scopes:
 
 Token → `HUBSPOT_TOKEN`. Optional `HUBSPOT_OWNER_ID` (Eriks Owner-ID 451143905), damit Nachrichten als von ihm geloggt erscheinen.
 
-Empfehlung: in der Property **Leadherkunft** die Option „WhatsApp“ ergänzen und `LEADHERKUNFT_VALUE=WhatsApp` setzen. Fehlt die Option, legt der Dienst den Kontakt ohne Herkunft an und warnt im Log.
+**Leadherkunft:** Jeder über WhatsApp angelegte Kontakt bekommt `leadherkunft = WhatsApp`. Die Option wird beim ersten Start automatisch in der Property **Leadherkunft** angelegt, falls sie fehlt (dafür der Scope `crm.schemas.contacts.write`). Ein anderer Wert lässt sich über `LEADHERKUNFT_VALUE` setzen.
 
 ### 3. Dienst starten
 
 ```bash
 cp .env.example .env     # Werte eintragen
 npm install
-npm test                 # 11 Tests: Nummern, Webhook-Parsing, Signatur, Abgleich, Zustand
+npm test                 # 15 Tests: Nummern, Webhook-Parsing, Coexistence, Signatur, Abgleich, Zustand
 npm start
 ```
 
@@ -70,7 +98,14 @@ Der Dienst braucht eine öffentliche HTTPS-URL (Railway, Render, Fly.io, Hetzner
 
 Der Dienst stellt einen **MCP-Server** unter `/mcp` bereit. Zwei Wege:
 
-- **claude.ai / Claude-App (Handy):** Einstellungen → Connectors → „Benutzerdefinierten Connector hinzufügen“ → URL `https://<domain>/mcp/<MCP_PATH_SECRET>`. Der Pfad-Schlüssel ersetzt den Header, weil die App keine eigenen Header setzen kann. Den Schlüssel lang und zufällig wählen (`openssl rand -hex 24`).
+- **claude.ai / Claude-App (Handy):** Schritt für Schritt:
+  1. `MCP_PATH_SECRET` in der `.env` setzen, lang und zufällig: `openssl rand -hex 24`. Dienst neu starten.
+  2. Prüfen, dass der Dienst öffentlich erreichbar ist: `curl https://<domain>/health` muss `{"ok":true,…}` liefern. Claude verbindet sich aus Anthropics Cloud, nicht vom Handy aus.
+  3. In der Claude-App (oder auf claude.ai): **Einstellungen → Connectors → „Benutzerdefinierten Connector hinzufügen“** (im Browser: *Anpassen → Connectors → + → Add custom connector*).
+  4. Name `Bodenfix WhatsApp`, URL **`https://<domain>/mcp/<MCP_PATH_SECRET>`**. Erweiterte Einstellungen (OAuth) leer lassen. Hinzufügen.
+  5. Im Chat über das Werkzeug-Menü („+“ / Connectors) den Connector einschalten. Beim ersten Aufruf von `whatsapp_send` fragt Claude nach Erlaubnis; „Immer erlauben“ wählen, damit es vom Handy aus ohne Rückfrage geht.
+  6. Test: *„Zeig mir die letzten WhatsApp-Konversationen“* (liest nur) und danach eine Nachricht an die eigene Nummer schicken.
+  Der Connector folgt dem Account, gilt also auf Handy, Web und Desktop gleichzeitig. Der Pfad-Schlüssel ersetzt den Header, weil die App keine eigenen Header setzen kann; wer die URL kennt, kann senden, deshalb den Schlüssel geheim halten und bei Verdacht einfach ändern.
 - **Claude Desktop / Claude Code:** URL `https://<domain>/mcp` mit Header `Authorization: Bearer <API_KEY>`.
 
 Danach reicht im Chat: *„Schreib der 0172 6748792 per WhatsApp, dass wir Donnerstag 9 Uhr kommen.“* Claude nutzt `whatsapp_send`, der Dienst sendet und loggt in HubSpot.
@@ -84,6 +119,7 @@ Werkzeuge:
 | `whatsapp_recent_conversations` | Wer hat zuletzt geschrieben, mit Kontakt-Link |
 | `whatsapp_history` | WhatsApp-Verlauf eines Kontakts aus HubSpot |
 | `hubspot_sync_phone_index` | Telefon-Index manuell komplett abgleichen |
+| `whatsapp_request_app_sync` | Coexistence: Adressbuch bzw. 6-Monats-Verlauf von Meta anfordern |
 
 Ohne Claude: `POST /send` mit `{"to":"0172…","text":"…"}` und Header `x-api-key`, oder `npm run send -- "+49172…" "Text"`.
 
@@ -92,7 +128,7 @@ Ohne Claude: `POST /send` mit `{"to":"0172…","text":"…"}` und Header `x-api-
 **Abgleich eingehender Nummern.** Reihenfolge: exakter Treffer auf `whatsapp_e164` → `hs_whatsapp_phone_number` → Freitextsuche in mehreren Schreibweisen mit normalisiertem Nachvergleich. Ein Treffer ohne Index bekommt den Index sofort nachgetragen. Treffer werden lokal gemerkt, sodass Folgenachrichten HubSpot nur noch fürs Protokollieren brauchen.
 
 **Lead-Regel (`LEAD_POLICY`).**
-- `inbound` (Standard): Jede unbekannte Nummer, die *an* Bodenfix schreibt, wird als Lead angelegt – Name aus dem WhatsApp-Profil, `lifecyclestage=lead`, `hs_lead_status=NEW` („Neuer Kontakt“). Nummern, die Erik nur *anschreibt*, werden nie angelegt.
+- `inbound` (Standard): Jede unbekannte Nummer, die *an* Bodenfix schreibt, wird als Lead angelegt – Name aus dem WhatsApp-Profil bzw. dem App-Adressbuch, `lifecyclestage=lead`, `hs_lead_status=NEW` („Neuer Kontakt“), `leadherkunft=WhatsApp`. Nummern, die Erik nur *anschreibt*, sowie Verlaufs- und Echo-Nachrichten legen nie Kontakte an.
 - `classify`: Zusätzlich prüft Claude (`claude-opus-5-5`, strukturierte Antwort) anhand der ersten Nachricht bzw. des Transkripts, ob es eine Kundenanfrage ist. Lieferanten, Bewerbungen, Spam und Privates werden nicht angelegt. Im Zweifel wird angelegt – ein verpasster Lead kostet mehr als ein überflüssiger Kontakt.
 - `never`: nur synchronisieren, nichts anlegen.
 
@@ -108,7 +144,7 @@ Die Labels aus der WhatsApp-Business-App („Neuer Kunde“ usw.) stellt Meta ü
 
 ## Grenzen
 
-- Nur Nachrichten, die über die Cloud API laufen, kommen an. Ein normales WhatsApp-Business-Handy ohne Coexistence liefert keine Webhooks.
+- Ohne Coexistence liefert ein WhatsApp-Business-Handy keine Webhooks. Coexistence selbst setzt einen Tech Provider oder Partner für das Onboarding voraus (siehe 1a).
 - HubSpot-Suche deckt maximal 10 000 Kontakte pro Abfrage ab; der Index-Sync paginiert zu 100 und bricht nach 120 Seiten ab (reicht für den aktuellen Bestand von rund 1 700 Kontakten um ein Mehrfaches).
 - Statusmeldungen (zugestellt/gelesen) werden lokal gespeichert, nicht nach HubSpot geschrieben.
 - Zustand liegt in einer JSON-Datei; bei mehreren Instanzen eine gemeinsame Ablage oder eine Datenbank vorsehen.

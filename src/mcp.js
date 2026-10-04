@@ -5,6 +5,7 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { z } from 'zod';
 import { config } from './config.js';
 import { normalizePhone } from './phone.js';
+import { requestSmbAppSync } from './whatsapp.js';
 import { findContactByPhone, listWhatsAppHistory, contactDisplayName, contactUrl, syncPhoneIndex } from './hubspot.js';
 
 const text = (obj) => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
@@ -118,6 +119,23 @@ export function buildMcpServer({ outbound, store }) {
       const stats = await syncPhoneIndex({ since });
       store.lastSync = started;
       return text({ since, ...stats });
+    }
+  );
+
+  server.registerTool(
+    'whatsapp_request_app_sync',
+    {
+      title: 'Coexistence-Sync anfordern',
+      description: 'Nach dem Verbinden der WhatsApp-Business-App: Adressbuch (contacts) oder 6-Monats-Verlauf (history) von Meta anfordern. Muss innerhalb von 24 h nach dem Onboarding passieren, erst contacts, dann history.',
+      inputSchema: z.object({ what: z.enum(['contacts', 'history']) }),
+    },
+    async ({ what }) => {
+      try {
+        const r = await requestSmbAppSync(what === 'contacts' ? 'smb_app_state_sync' : 'history');
+        return text({ requested: what, response: r });
+      } catch (err) {
+        return { ...text(`Sync-Anforderung fehlgeschlagen: ${err.message}`), isError: true };
+      }
     }
   );
 
